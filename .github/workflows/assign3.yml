@@ -1,0 +1,65 @@
+name: Multi-Env Deploy with Notifications
+
+on:
+  push:
+    branches: [staging, main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      START_TIME: ${{ github.run_started_at }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set Environment Variables
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "staging" ]; then
+            echo "ENV_NAME=staging" >> $GITHUB_ENV
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "ENV_NAME=production" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "./"
+          target: "/var/www/${{ env.ENV_NAME }}-site"
+          overwrite: true
+
+      - name: Calculate Build Duration
+        id: duration
+        run: |
+          START=$(date -d "${START_TIME}" +%s)
+          END=$(date +%s)
+          echo "BUILD_DURATION=$((END - START)) seconds" >> $GITHUB_ENV
+
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": ":rocket: Deployment to *${{ env.ENV_NAME }}* complete!\nCommit: ${{ github.event.head_commit.message }} by ${{ github.actor }}\nDuration: ${{ env.BUILD_DURATION }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "${{ env.ENV_NAME }} Deployment Complete"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_FROM }}
+          body: |
+            Deployment to ${{ env.ENV_NAME }} completed successfully!
+            Commit: ${{ github.event.head_commit.message }}
+            Author: ${{ github.actor }}
+            Duration: ${{ env.BUILD_DURATION }}
